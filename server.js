@@ -98,4 +98,25 @@ app.delete("/api/barbershops/:id/appointments/:appointmentId", authMiddleware, (
 app.get("/api/barbershops/:id/appointments/slots/:proId", authMiddleware, (req, res) => {
   const allSlots = ["09:00","09:30","10:00","10:30","11:00","11:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00"];
   if (!req.query.date) return res.json(allSlots);
-  const occupied = db.prepare(`SELECT substr(scheduled_at, 12, 5) AS time_slot FROM appointments WHERE barbershop_id = ? AND professional_id = ? AND date(scheduled_
+  const occupied = db.prepare(`SELECT substr(scheduled_at, 12, 5) AS time_slot FROM appointments WHERE barbershop_id = ? AND professional_id = ? AND date(scheduled_at) = date(?) AND status NOT IN ('canceled')`).all(req.params.id, req.params.proId, req.query.date).map(r => r.time_slot);
+  res.json(allSlots.filter(s => !occupied.includes(s)));
+});
+
+app.post("/api/book/:publicId/confirmar", (req, res) => {
+  const shop = db.prepare("SELECT * FROM barbershops WHERE public_id = ?").get(req.params.publicId);
+  if (!shop) return res.status(404).json({ error: "Barbearia não encontrada" });
+  const { client_name, client_phone, service_id, professional_id, scheduled_at } = req.body;
+  if (!client_name || !scheduled_at) return res.status(400).json({ error: "Dados obrigatórios faltando" });
+  const appointment = db.prepare("INSERT INTO appointments (barbershop_id, client_name, client_phone, service_id, professional_id, scheduled_at, status) VALUES (?, ?, ?, ?, ?, ?, 'pending') RETURNING *").get(shop.id, client_name, client_phone || null, service_id || null, professional_id || null, scheduled_at);
+  const service = service_id ? db.prepare("SELECT * FROM services WHERE id = ?").get(service_id) : null;
+  const professional = professional_id ? db.prepare("SELECT * FROM professionals WHERE id = ?").get(professional_id) : null;
+  const msg = `Olá! Novo agendamento:\n\n✂️ Serviço: ${service?.name || "-"}\n👨‍💼 Profissional: ${professional?.name || "-"}\n📅 Data/Hora: ${scheduled_at}\n👤 Cliente: ${client_name}\n📱 Telefone: ${client_phone || "-"}`;
+  res.status(201).json({ appointment, whatsapp_link: `https://wa.me/?text=${encodeURIComponent(msg)}` });
+});
+
+app.get("/api/barbershops/:id/tv", (req, res) => {
+  const today = new Date().toISOString().split("T")[0];
+  res.json({ queue: db.prepare(`SELECT a.*, s.name AS service_name, p.name AS professional_name FROM appointments a LEFT JOIN services s ON a.service_id = s.id LEFT JOIN professionals p ON a.professional_id = p.id WHERE a.barbershop_id = ? AND date(a.scheduled_at) = ? AND a.status NOT IN ('canceled') ORDER BY a.scheduled_at ASC`).all(req.params.id, today), date: today });
+});
+
+app.listen(PORT, () => console.log(`Barber Flow API rodando na porta ${PORT}`));
