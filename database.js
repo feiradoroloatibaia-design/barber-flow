@@ -79,43 +79,41 @@ db.exec(`
 
 // Migração automática de colunas
 const cols = db.prepare("PRAGMA table_info(barbershops)").all().map((c) => c.name);
-if (!cols.includes("owner_name")) db.exec("ALTER TABLE barbershops ADD COLUMN owner_name TEXT");
-if (!cols.includes("cpf")) db.exec("ALTER TABLE barbershops ADD COLUMN cpf TEXT");
-if (!cols.includes("cnpj")) db.exec("ALTER TABLE barbershops ADD COLUMN cnpj TEXT");
-if (!cols.includes("city")) db.exec("ALTER TABLE barbershops ADD COLUMN city TEXT");
-if (!cols.includes("state")) db.exec("ALTER TABLE barbershops ADD COLUMN state TEXT");
-if (!cols.includes("zip_code")) db.exec("ALTER TABLE barbershops ADD COLUMN zip_code TEXT");
+const colsToAdd = ["owner_name", "cpf", "cnpj", "city", "state", "zip_code"];
+colsToAdd.forEach(col => {
+    if (!cols.includes(col)) db.exec(`ALTER TABLE barbershops ADD COLUMN ${col} TEXT`);
+});
+
 if (!cols.includes("plan_type")) db.exec("ALTER TABLE barbershops ADD COLUMN plan_type TEXT DEFAULT 'free'");
 if (!cols.includes("payment_status")) db.exec("ALTER TABLE barbershops ADD COLUMN payment_status TEXT DEFAULT 'trial'");
 if (!cols.includes("payment_due_date")) db.exec("ALTER TABLE barbershops ADD COLUMN payment_due_date DATE");
 if (!cols.includes("expires_at")) db.exec("ALTER TABLE barbershops ADD COLUMN expires_at DATETIME");
 if (!cols.includes("active")) db.exec("ALTER TABLE barbershops ADD COLUMN active INTEGER DEFAULT 1");
 
-// Seed inicial
-const existing = db.prepare("SELECT id FROM barbershops WHERE id = 2").get();
-if (!existing) {
-  db.prepare(`
-    INSERT OR IGNORE INTO barbershops (id, name, public_id, owner_name, phone, address, city, state, plan_type, payment_status, active)
-    VALUES (2, 'Barber Flow Demo', 'bDM8UCcASg', 'Marco Admin', '(11) 99999-9999', 'Rua Exemplo, 123', 'Atibaia', 'SP', 'pro', 'active', 1)
-  `).run();
+// --- SEED DE SEGURANÇA (FORÇA A CRIAÇÃO DOS ACESSOS) ---
 
-  const hash = bcrypt.hashSync("12345678", 10);
-  db.prepare(`INSERT OR IGNORE INTO users (barbershop_id, email, password_hash, name, role) VALUES (2, 'dono@barbearia.com', ?, 'Dono da Barbearia', 'owner')`).run(hash);
+// 1. Garante que a Barbearia Demo exista
+let shop = db.prepare("SELECT id FROM barbershops WHERE id = 2").get();
+if (!shop) {
+    db.prepare(`
+        INSERT INTO barbershops (id, name, public_id, owner_name, phone, address, city, state, plan_type, payment_status, active)
+        VALUES (2, 'Barber Flow Demo', 'bDM8UCcASg', 'Marco Admin', '(11) 99999-9999', 'Rua Exemplo, 123', 'Atibaia', 'SP', 'pro', 'active', 1)
+    `).run();
+}
 
-  const hashAdmin = bcrypt.hashSync("admin2024", 10);
-  db.prepare(`INSERT OR IGNORE INTO users (barbershop_id, email, password_hash, name, role) VALUES (2, 'admin@barberflow.com', ?, 'Administrador Master', 'admin')`).run(hashAdmin);
+// 2. Garante que o usuário DONO exista (senha 12345678)
+const existingOwner = db.prepare("SELECT id FROM users WHERE email = 'dono@barbearia.com'").get();
+if (!existingOwner) {
+    const hashOwner = bcrypt.hashSync("12345678", 10);
+    db.prepare(`INSERT INTO users (barbershop_id, email, password_hash, name, role) VALUES (2, 'dono@barbearia.com', ?, 'Dono da Barbearia', 'owner')`).run(hashOwner);
+}
 
-  const svc = db.prepare(`INSERT INTO services (barbershop_id, name, price_cents, duration_minutes) VALUES (?, ?, ?, ?)`);
-  svc.run(2, "Corte Simples", 3500, 30);
-  svc.run(2, "Corte Degradê", 4500, 45);
-  svc.run(2, "Barba", 2500, 20);
-  svc.run(2, "Corte + Barba", 6500, 60);
-
-  const pro = db.prepare(`INSERT INTO professionals (barbershop_id, name, phone, specialties, working_days) VALUES (?, ?, ?, ?, ?)`);
-  pro.run(2, "Carlos Silva", "11999990001", "Corte, Degradê, Barba", "1,2,3,4,5,6");
-  pro.run(2, "Ricardo Souza", "11999990002", "Corte Clássico, Barba", "1,2,3,4,5");
-
-  console.log("Seed criado!");
+// 3. Garante que o usuário ADMIN exista (senha admin2024)
+const existingAdmin = db.prepare("SELECT id FROM users WHERE email = 'admin@barberflow.com'").get();
+if (!existingAdmin) {
+    const hashAdmin = bcrypt.hashSync("admin2024", 10);
+    db.prepare(`INSERT INTO users (barbershop_id, email, password_hash, name, role) VALUES (2, 'admin@barberflow.com', ?, 'Administrador Master', 'admin')`).run(hashAdmin);
+    console.log("Admin Master recriado por segurança!");
 }
 
 module.exports = db;
