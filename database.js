@@ -18,8 +18,10 @@ db.exec(`
     city TEXT,
     state TEXT,
     zip_code TEXT,
+    plan_type TEXT DEFAULT 'free',
     payment_status TEXT DEFAULT 'trial',
     payment_due_date DATE,
+    expires_at DATETIME,
     active INTEGER DEFAULT 1,
     created_at DATETIME DEFAULT CURRENT_TIMESTAMP
   );
@@ -75,7 +77,7 @@ db.exec(`
   );
 `);
 
-// Migração — adiciona colunas novas se não existirem
+// Migração automática de colunas
 const cols = db.prepare("PRAGMA table_info(barbershops)").all().map((c) => c.name);
 if (!cols.includes("owner_name")) db.exec("ALTER TABLE barbershops ADD COLUMN owner_name TEXT");
 if (!cols.includes("cpf")) db.exec("ALTER TABLE barbershops ADD COLUMN cpf TEXT");
@@ -83,30 +85,25 @@ if (!cols.includes("cnpj")) db.exec("ALTER TABLE barbershops ADD COLUMN cnpj TEX
 if (!cols.includes("city")) db.exec("ALTER TABLE barbershops ADD COLUMN city TEXT");
 if (!cols.includes("state")) db.exec("ALTER TABLE barbershops ADD COLUMN state TEXT");
 if (!cols.includes("zip_code")) db.exec("ALTER TABLE barbershops ADD COLUMN zip_code TEXT");
+if (!cols.includes("plan_type")) db.exec("ALTER TABLE barbershops ADD COLUMN plan_type TEXT DEFAULT 'free'");
 if (!cols.includes("payment_status")) db.exec("ALTER TABLE barbershops ADD COLUMN payment_status TEXT DEFAULT 'trial'");
 if (!cols.includes("payment_due_date")) db.exec("ALTER TABLE barbershops ADD COLUMN payment_due_date DATE");
+if (!cols.includes("expires_at")) db.exec("ALTER TABLE barbershops ADD COLUMN expires_at DATETIME");
 if (!cols.includes("active")) db.exec("ALTER TABLE barbershops ADD COLUMN active INTEGER DEFAULT 1");
 
 // Seed inicial
 const existing = db.prepare("SELECT id FROM barbershops WHERE id = 2").get();
 if (!existing) {
   db.prepare(`
-    INSERT OR IGNORE INTO barbershops (id, name, public_id, owner_name, phone, address, city, state, payment_status, active)
-    VALUES (2, 'Barber Flow Demo', 'bDM8UCcASg', 'Marco Admin', '(11) 99999-9999', 'Rua Exemplo, 123', 'Atibaia', 'SP', 'active', 1)
+    INSERT OR IGNORE INTO barbershops (id, name, public_id, owner_name, phone, address, city, state, plan_type, payment_status, active)
+    VALUES (2, 'Barber Flow Demo', 'bDM8UCcASg', 'Marco Admin', '(11) 99999-9999', 'Rua Exemplo, 123', 'Atibaia', 'SP', 'pro', 'active', 1)
   `).run();
 
   const hash = bcrypt.hashSync("12345678", 10);
-  db.prepare(`
-    INSERT OR IGNORE INTO users (barbershop_id, email, password_hash, name, role)
-    VALUES (2, 'dono@barbearia.com', ?, 'Dono da Barbearia', 'owner')
-  `).run(hash);
+  db.prepare(`INSERT OR IGNORE INTO users (barbershop_id, email, password_hash, name, role) VALUES (2, 'dono@barbearia.com', ?, 'Dono da Barbearia', 'owner')`).run(hash);
 
-  // Admin master
   const hashAdmin = bcrypt.hashSync("admin2024", 10);
-  db.prepare(`
-    INSERT OR IGNORE INTO users (barbershop_id, email, password_hash, name, role)
-    VALUES (2, 'admin@barberflow.com', ?, 'Administrador', 'admin')
-  `).run(hashAdmin);
+  db.prepare(`INSERT OR IGNORE INTO users (barbershop_id, email, password_hash, name, role) VALUES (2, 'admin@barberflow.com', ?, 'Administrador Master', 'admin')`).run(hashAdmin);
 
   const svc = db.prepare(`INSERT INTO services (barbershop_id, name, price_cents, duration_minutes) VALUES (?, ?, ?, ?)`);
   svc.run(2, "Corte Simples", 3500, 30);
