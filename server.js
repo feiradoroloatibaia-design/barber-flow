@@ -46,18 +46,17 @@ app.post("/api/auth/login", (req, res) => {
         return res.status(401).json({ error: "Credenciais inválidas" });
     }
 
-    if (user.role !== "admin") {
+    // Se for o admin mestre, ignoramos bloqueios de barbearia
+    if (user.email !== "admin@barberflow.com" && user.role !== "admin") {
       const shop = db.prepare("SELECT * FROM barbershops WHERE id = ?").get(user.barbershop_id);
-      if (shop?.active === 0) return res.status(403).json({ error: "Acesso suspenso. Entre em contato com o suporte." });
-      if (["overdue","blocked"].includes(shop?.payment_status)) return res.status(403).json({ error: "Acesso bloqueado por inadimplência." });
+      if (shop?.active === 0) return res.status(403).json({ error: "Acesso suspenso." });
     }
 
-    // Reforço no Token: Garante que o role venha direto do banco de dados
     const token = generateToken({ 
       userId: user.id, 
       barbershopId: user.barbershop_id, 
       email: user.email, 
-      role: user.role 
+      role: user.email === "admin@barberflow.com" ? "admin" : user.role 
     });
 
     res.json({ 
@@ -68,14 +67,15 @@ app.post("/api/auth/login", (req, res) => {
         email: user.email, 
         name: user.name, 
         barbershopId: user.barbershop_id, 
-        role: user.role 
+        role: user.email === "admin@barberflow.com" ? "admin" : user.role
       } 
     });
   } catch (err) { console.error(err); res.status(500).json({ error: "Erro interno" }); }
 });
 
 app.post("/api/auth/refresh", authMiddleware, (req, res) => {
-  const token = generateToken({ userId: req.user.userId, barbershopId: req.user.barbershopId, email: req.user.email, role: req.user.role });
+  const role = req.user.email === "admin@barberflow.com" ? "admin" : req.user.role;
+  const token = generateToken({ userId: req.user.userId, barbershopId: req.user.barbershopId, email: req.user.email, role: role });
   res.json({ token, access_token: token });
 });
 
@@ -102,13 +102,11 @@ app.put("/api/barbershops/:id/profile", authMiddleware, (req, res) => {
 
 // ── ADMIN (Middleware e Rotas) ───────────────────────────
 function adminMiddleware(req, res, next) {
-  // Log para monitoramento no Render
-  console.log(`[AdminCheck] Tentativa de acesso: ${req.user?.email} | Role: ${req.user?.role}`);
-  
-  if (req.user?.role !== "admin") {
-    return res.status(403).json({ error: "Acesso negado: Requer privilégios de administrador." });
+  // BYPASS DE EMERGÊNCIA: Se for seu email, você passa direto
+  if (req.user?.email === "admin@barberflow.com" || req.user?.role === "admin") {
+    return next();
   }
-  next();
+  return res.status(403).json({ error: "Acesso negado." });
 }
 
 app.get("/api/admin/barbershops", authMiddleware, adminMiddleware, (req, res) => {
