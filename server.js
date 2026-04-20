@@ -8,7 +8,11 @@ const { authMiddleware, generateToken } = require("./auth");
 const app = express();
 const PORT = process.env.PORT || 3000;
 
-app.use(cors({ origin: "*", methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"], allowedHeaders: ["Content-Type","Authorization"] }));
+app.use(cors({ 
+  origin: "*", 
+  methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"], 
+  allowedHeaders: ["Content-Type","Authorization"] 
+}));
 app.use(express.json());
 
 app.get("/api/health", (req, res) => res.json({ status: "ok", timestamp: new Date().toISOString() }));
@@ -38,16 +42,35 @@ app.post("/api/auth/login", (req, res) => {
   if (!email || !password) return res.status(400).json({ error: "Email e senha são obrigatórios" });
   try {
     const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
-    if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: "Credenciais inválidas" });
+    if (!user || !bcrypt.compareSync(password, user.password_hash)) {
+        return res.status(401).json({ error: "Credenciais inválidas" });
+    }
 
     if (user.role !== "admin") {
       const shop = db.prepare("SELECT * FROM barbershops WHERE id = ?").get(user.barbershop_id);
       if (shop?.active === 0) return res.status(403).json({ error: "Acesso suspenso. Entre em contato com o suporte." });
-      if (["overdue","blocked"].includes(shop?.payment_status)) return res.status(403).json({ error: "Acesso bloqueado por inadimplência. Entre em contato com o suporte." });
+      if (["overdue","blocked"].includes(shop?.payment_status)) return res.status(403).json({ error: "Acesso bloqueado por inadimplência." });
     }
 
-    const token = generateToken({ userId: user.id, barbershopId: user.barbershop_id, email, role: user.role });
-    res.json({ token, access_token: token, user: { id: user.id, email: user.email, name: user.name, barbershopId: user.barbershop_id, role: user.role } });
+    // Reforço no Token: Garante que o role venha direto do banco de dados
+    const token = generateToken({ 
+      userId: user.id, 
+      barbershopId: user.barbershop_id, 
+      email: user.email, 
+      role: user.role 
+    });
+
+    res.json({ 
+      token, 
+      access_token: token, 
+      user: { 
+        id: user.id, 
+        email: user.email, 
+        name: user.name, 
+        barbershopId: user.barbershop_id, 
+        role: user.role 
+      } 
+    });
   } catch (err) { console.error(err); res.status(500).json({ error: "Erro interno" }); }
 });
 
@@ -77,9 +100,14 @@ app.put("/api/barbershops/:id/profile", authMiddleware, (req, res) => {
   res.json(db.prepare("SELECT * FROM barbershops WHERE id = ?").get(req.params.id));
 });
 
-// ── ADMIN ────────────────────────────────────────────────
+// ── ADMIN (Middleware e Rotas) ───────────────────────────
 function adminMiddleware(req, res, next) {
-  if (req.user?.role !== "admin") return res.status(403).json({ error: "Acesso negado" });
+  // Log para monitoramento no Render
+  console.log(`[AdminCheck] Tentativa de acesso: ${req.user?.email} | Role: ${req.user?.role}`);
+  
+  if (req.user?.role !== "admin") {
+    return res.status(403).json({ error: "Acesso negado: Requer privilégios de administrador." });
+  }
   next();
 }
 
