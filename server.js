@@ -11,7 +11,6 @@ const PORT = process.env.PORT || 3000;
 app.use(cors({ origin: "*", methods: ["GET","POST","PUT","PATCH","DELETE","OPTIONS"], allowedHeaders: ["Content-Type","Authorization"] }));
 app.use(express.json());
 
-// ── HEALTH ──────────────────────────────────────────────
 app.get("/api/health", (req, res) => res.json({ status: "ok", timestamp: new Date().toISOString() }));
 
 // ── AUTH ─────────────────────────────────────────────────
@@ -21,7 +20,12 @@ app.post("/api/auth/register", (req, res) => {
   try {
     if (db.prepare("SELECT id FROM users WHERE email = ?").get(email)) return res.status(400).json({ error: "Email já cadastrado" });
     const publicId = Math.random().toString(36).substring(2, 12);
-    const shop = db.prepare("INSERT INTO barbershops (name, public_id, payment_status, active) VALUES (?, ?, 'trial', 1) RETURNING *").get(barbershop_name || "Minha Barbearia", publicId);
+    const expires = new Date();
+    expires.setDate(expires.getDate() + 30);
+    const shop = db.prepare(`
+      INSERT INTO barbershops (name, public_id, plan_type, payment_status, expires_at, active)
+      VALUES (?, ?, 'free', 'trial', ?, 1) RETURNING *
+    `).get(barbershop_name || "Minha Barbearia", publicId, expires.toISOString());
     const hash = bcrypt.hashSync(password, 10);
     const user = db.prepare("INSERT INTO users (barbershop_id, email, password_hash, name, role) VALUES (?, ?, ?, ?, 'owner') RETURNING id, email, name, barbershop_id").get(shop.id, email, hash, name || "");
     const token = generateToken({ userId: user.id, barbershopId: shop.id, email, role: "owner" });
@@ -36,10 +40,10 @@ app.post("/api/auth/login", (req, res) => {
     const user = db.prepare("SELECT * FROM users WHERE email = ?").get(email);
     if (!user || !bcrypt.compareSync(password, user.password_hash)) return res.status(401).json({ error: "Credenciais inválidas" });
 
-    // Verifica se barbearia está ativa
     if (user.role !== "admin") {
       const shop = db.prepare("SELECT * FROM barbershops WHERE id = ?").get(user.barbershop_id);
-      if (shop && shop.active === 0) return res.status(403).json({ error: "Acesso suspenso. Entre em contato com o suporte." });
+      if (shop?.active === 0) return res.status(403).json({ error: "Acesso suspenso. Entre em contato com o suporte." });
+      if (["overdue","blocked"].includes(shop?.payment_status)) return res.status(403).json({ error: "Acesso bloqueado por inadimplência. Entre em contato com o suporte." });
     }
 
     const token = generateToken({ userId: user.id, barbershopId: user.barbershop_id, email, role: user.role });
@@ -63,14 +67,10 @@ app.put("/api/barbershops/:id/profile", authMiddleware, (req, res) => {
   const { name, owner_name, cpf, cnpj, phone, address, city, state, zip_code } = req.body;
   db.prepare(`
     UPDATE barbershops SET
-      name = COALESCE(?, name),
-      owner_name = COALESCE(?, owner_name),
-      cpf = COALESCE(?, cpf),
-      cnpj = COALESCE(?, cnpj),
-      phone = COALESCE(?, phone),
-      address = COALESCE(?, address),
-      city = COALESCE(?, city),
-      state = COALESCE(?, state),
+      name = COALESCE(?, name), owner_name = COALESCE(?, owner_name),
+      cpf = COALESCE(?, cpf), cnpj = COALESCE(?, cnpj),
+      phone = COALESCE(?, phone), address = COALESCE(?, address),
+      city = COALESCE(?, city), state = COALESCE(?, state),
       zip_code = COALESCE(?, zip_code)
     WHERE id = ?
   `).run(name, owner_name, cpf, cnpj, phone, address, city, state, zip_code, req.params.id);
@@ -85,7 +85,7 @@ function adminMiddleware(req, res, next) {
 
 app.get("/api/admin/barbershops", authMiddleware, adminMiddleware, (req, res) => {
   const shops = db.prepare(`
-    SELECT b.*, u.email, u.name as user_name
+    SELECT b.*, u.email as owner_email
     FROM barbershops b
     LEFT JOIN users u ON u.barbershop_id = b.id AND u.role = 'owner'
     ORDER BY b.created_at DESC
@@ -94,14 +94,16 @@ app.get("/api/admin/barbershops", authMiddleware, adminMiddleware, (req, res) =>
 });
 
 app.patch("/api/admin/barbershops/:id/status", authMiddleware, adminMiddleware, (req, res) => {
-  const { active, payment_status, payment_due_date } = req.body;
+  const { active, payment_status, plan_type, expires_at, payment_due_date } = req.body;
   db.prepare(`
     UPDATE barbershops SET
       active = COALESCE(?, active),
       payment_status = COALESCE(?, payment_status),
+      plan_type = COALESCE(?, plan_type),
+      expires_at = COALESCE(?, expires_at),
       payment_due_date = COALESCE(?, payment_due_date)
     WHERE id = ?
-  `).run(active, payment_status, payment_due_date, req.params.id);
+  `).run(active, payment_status, plan_type, expires_at, payment_due_date, req.params.id);
   res.json(db.prepare("SELECT * FROM barbershops WHERE id = ?").get(req.params.id));
 });
 
@@ -109,13 +111,11 @@ app.patch("/api/admin/barbershops/:id/status", authMiddleware, adminMiddleware, 
 app.get("/api/barbershops/:id/services", authMiddleware, (req, res) => {
   res.json(db.prepare("SELECT * FROM services WHERE barbershop_id = ? AND active = 1 ORDER BY created_at ASC").all(req.params.id));
 });
-
 app.post("/api/barbershops/:id/services", authMiddleware, (req, res) => {
   const { name, price_cents, duration_minutes } = req.body;
   if (!name) return res.status(400).json({ error: "Nome é obrigatório" });
   res.status(201).json(db.prepare("INSERT INTO services (barbershop_id, name, price_cents, duration_minutes) VALUES (?, ?, ?, ?) RETURNING *").get(req.params.id, name, price_cents || 0, duration_minutes || 30));
 });
-
 app.delete("/api/barbershops/:id/services/:serviceId", authMiddleware, (req, res) => {
   db.prepare("UPDATE services SET active = 0 WHERE id = ?").run(req.params.serviceId);
   res.json({ success: true });
@@ -125,13 +125,11 @@ app.delete("/api/barbershops/:id/services/:serviceId", authMiddleware, (req, res
 app.get("/api/barbershops/:id/professionals", authMiddleware, (req, res) => {
   res.json(db.prepare("SELECT * FROM professionals WHERE barbershop_id = ? AND active = 1 ORDER BY created_at ASC").all(req.params.id));
 });
-
 app.post("/api/barbershops/:id/professionals", authMiddleware, (req, res) => {
   const { name, phone, specialties, working_days } = req.body;
   if (!name) return res.status(400).json({ error: "Nome é obrigatório" });
   res.status(201).json(db.prepare("INSERT INTO professionals (barbershop_id, name, phone, specialties, working_days) VALUES (?, ?, ?, ?, ?) RETURNING *").get(req.params.id, name, phone || null, specialties || null, working_days || "1,2,3,4,5"));
 });
-
 app.delete("/api/barbershops/:id/professionals/:proId", authMiddleware, (req, res) => {
   db.prepare("UPDATE professionals SET active = 0 WHERE id = ?").run(req.params.proId);
   res.json({ success: true });
@@ -141,25 +139,21 @@ app.delete("/api/barbershops/:id/professionals/:proId", authMiddleware, (req, re
 app.get("/api/barbershops/:id/appointments", authMiddleware, (req, res) => {
   res.json(db.prepare(`SELECT a.*, s.name AS service_name, s.price_cents, p.name AS professional_name FROM appointments a LEFT JOIN services s ON a.service_id = s.id LEFT JOIN professionals p ON a.professional_id = p.id WHERE a.barbershop_id = ? ORDER BY a.scheduled_at DESC`).all(req.params.id));
 });
-
 app.post("/api/barbershops/:id/appointments", authMiddleware, (req, res) => {
   const { client_name, client_phone, service_id, professional_id, scheduled_at, status } = req.body;
   if (!client_name || !scheduled_at) return res.status(400).json({ error: "Nome e data são obrigatórios" });
   res.status(201).json(db.prepare("INSERT INTO appointments (barbershop_id, client_name, client_phone, service_id, professional_id, scheduled_at, status) VALUES (?, ?, ?, ?, ?, ?, ?) RETURNING *").get(req.params.id, client_name, client_phone || null, service_id || null, professional_id || null, scheduled_at, status || "pending"));
 });
-
 app.patch("/api/barbershops/:id/appointments/:appointmentId/status", authMiddleware, (req, res) => {
   const { status } = req.body;
   if (!["pending","confirmed","completed","canceled"].includes(status)) return res.status(400).json({ error: "Status inválido" });
   db.prepare("UPDATE appointments SET status = ? WHERE id = ?").run(status, req.params.appointmentId);
   res.json(db.prepare("SELECT * FROM appointments WHERE id = ?").get(req.params.appointmentId));
 });
-
 app.delete("/api/barbershops/:id/appointments/:appointmentId", authMiddleware, (req, res) => {
   db.prepare("UPDATE appointments SET status = 'canceled' WHERE id = ?").run(req.params.appointmentId);
   res.json({ success: true });
 });
-
 app.get("/api/barbershops/:id/appointments/slots/:proId", authMiddleware, (req, res) => {
   const allSlots = ["09:00","09:30","10:00","10:30","11:00","11:30","13:00","13:30","14:00","14:30","15:00","15:30","16:00","16:30","17:00","17:30","18:00"];
   if (!req.query.date) return res.json(allSlots);
